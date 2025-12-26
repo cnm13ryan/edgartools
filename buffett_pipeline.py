@@ -23,6 +23,7 @@ How to run
    - python buffett_pipeline.py 0000320193 --years 10
    - python buffett_pipeline.py AAPL --years 5 --plots-dir plots
    - python buffett_pipeline.py AAPL --no-plots
+   - python buffett_pipeline.py AAPL --plots-dir outputs --report-file buffett_report.txt
 
 4) Use from a notebook or another Python module
    - from buffett_pipeline import run_pipeline
@@ -37,6 +38,8 @@ Outputs
 - Returns a PipelineResult (metrics DataFrame, narrative string, plot paths, flags)
   when imported and used programmatically.
 - Plots are saved to --plots-dir (default: ./plots) unless --no-plots is used.
+- The report file (metrics + narrative) is saved to --plots-dir unless an absolute
+  path is provided via --report-file.
 
 Notes
 -----
@@ -53,6 +56,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
@@ -136,7 +140,10 @@ def safe_get_financials(company: Company, retries: int = 1, delay: float = 2.0):
 
 
 def _render_statement(statement) -> pd.DataFrame:
-    rendered = statement.render(standard=True)
+    try:
+        rendered = statement.render(standard=True)
+    except TypeError:
+        rendered = statement.render()
     try:
         return rendered.to_dataframe(include_dimensions=False)
     except TypeError:
@@ -565,6 +572,30 @@ def _plot_series(series: pd.Series, title: str, ylabel: str, out_path: str) -> O
     return out_path
 
 
+def _write_report(result: PipelineResult, report_file: str) -> str:
+    report_path = Path(report_file)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(
+        [
+            "=== Metrics ===",
+            result.metrics.to_string(),
+            "",
+            "=== Narrative ===",
+            result.narrative,
+            "",
+        ]
+    )
+    report_path.write_text(content)
+    return str(report_path)
+
+
+def _resolve_report_path(report_file: str, plots_dir: str) -> str:
+    report_path = Path(report_file)
+    if not report_path.is_absolute():
+        report_path = Path(plots_dir) / report_path
+    return str(report_path)
+
+
 def run_pipeline(
     identifier: str,
     years: int = 10,
@@ -645,6 +676,11 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--email", dest="identity", help="EDGAR identity (Name email@domain.com)")
     parser.add_argument("--plots-dir", default="plots", help="Directory to save plots")
     parser.add_argument("--no-plots", action="store_true", help="Disable plot generation")
+    parser.add_argument(
+        "--report-file",
+        default="buffett_report.txt",
+        help="Report filename or path (relative paths are placed under --plots-dir)",
+    )
     return parser.parse_args(argv)
 
 
@@ -673,6 +709,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("\nPlots saved:")
         for path in result.plot_paths:
             print(f"- {path}")
+
+    report_path = _write_report(result, _resolve_report_path(args.report_file, args.plots_dir))
+    print(f"\nReport saved: {report_path}")
 
     return 0
 
