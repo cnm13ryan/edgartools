@@ -37,7 +37,7 @@ Outputs
 - Prints a metrics table and a narrative summary when run as a script.
 - Returns a PipelineResult (metrics DataFrame, narrative string, plot paths, flags)
   when imported and used programmatically.
-- Plots are saved to --plots-dir (default: ./plots) unless --no-plots is used.
+- Plots are saved to --plots-dir (default: ./<identifier>) unless --no-plots is used.
 - The report file (metrics + narrative) is saved to --plots-dir unless an absolute
   path is provided via --report-file.
 
@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -589,6 +590,15 @@ def _write_report(result: PipelineResult, report_file: str) -> str:
     return str(report_path)
 
 
+def _default_output_dir(identifier: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", identifier.strip())
+    return cleaned or "outputs"
+
+
+def _resolve_plots_dir(identifier: str, plots_dir: Optional[str]) -> str:
+    return plots_dir if plots_dir else _default_output_dir(identifier)
+
+
 def _resolve_report_path(report_file: str, plots_dir: str) -> str:
     report_path = Path(report_file)
     if not report_path.is_absolute():
@@ -600,13 +610,15 @@ def run_pipeline(
     identifier: str,
     years: int = 10,
     identity: Optional[str] = None,
-    plots_dir: str = "plots",
+    plots_dir: Optional[str] = None,
     generate_plots: bool = True,
 ) -> PipelineResult:
     if not identifier:
         raise ValueError("Identifier must be provided (ticker or CIK).")
 
     ensure_identity(identity)
+
+    plots_dir = _resolve_plots_dir(identifier, plots_dir)
 
     company = Company(identifier)
     logging.info("Processing %s", identifier)
@@ -674,7 +686,11 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("identifier", help="Ticker (e.g., AAPL) or CIK (e.g., 0000320193)")
     parser.add_argument("--years", type=int, default=10, help="Number of years to analyze")
     parser.add_argument("--email", dest="identity", help="EDGAR identity (Name email@domain.com)")
-    parser.add_argument("--plots-dir", default="plots", help="Directory to save plots")
+    parser.add_argument(
+        "--plots-dir",
+        default=None,
+        help="Directory to save plots (default: ./<identifier>)",
+    )
     parser.add_argument("--no-plots", action="store_true", help="Disable plot generation")
     parser.add_argument(
         "--report-file",
@@ -689,11 +705,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
 
     try:
+        plots_dir = _resolve_plots_dir(args.identifier, args.plots_dir)
         result = run_pipeline(
             identifier=args.identifier,
             years=args.years,
             identity=args.identity,
-            plots_dir=args.plots_dir,
+            plots_dir=plots_dir,
             generate_plots=not args.no_plots,
         )
     except Exception as exc:
@@ -710,7 +727,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         for path in result.plot_paths:
             print(f"- {path}")
 
-    report_path = _write_report(result, _resolve_report_path(args.report_file, args.plots_dir))
+    report_path = _write_report(result, _resolve_report_path(args.report_file, plots_dir))
     print(f"\nReport saved: {report_path}")
 
     return 0
